@@ -24,6 +24,7 @@ import {
   session as electronSession,
 } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
+import { setProxyCredentials, deleteProxyCredentials } from './proxy-credentials-store';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -274,11 +275,17 @@ export class AgentEngine {
 
     // ── 2. Apply proxy to this session ────────────────────────────────────
     if (proxy) {
-      // Embed credentials in the URL — works for most proxies.
+      // Register credentials BEFORE setting proxy so the global app.on('login')
+      // handler in index.ts can supply them when Chromium sends a 407.
+      if (proxy.username) {
+        setProxyCredentials(partition, {
+          username: proxy.username,
+          password: proxy.password ?? '',
+        });
+      }
+      // Embed credentials in the URL as well (works for some proxy servers).
       const proxyRules = buildProxyRules(proxy);
       try { await ses.setProxy({ proxyRules }); } catch { /* ignore */ }
-
-      // wc.on('login') is registered after wc is created below (Electron 30 approach)
     } else if (fallbackRules) {
       // No per-task proxy — inherit the active VPN or manual proxy
       try { await ses.setProxy({ proxyRules: fallbackRules }); } catch { /* ignore */ }
@@ -323,17 +330,8 @@ export class AgentEngine {
 
     const wc = view.webContents;
 
-    // ── Proxy auth: Electron 30 requires wc-level login handler, not session-level ──
-    // Fires when proxy returns 407 (credentials not embedded or proxy ignores them).
-    if (proxy?.username) {
-      (wc as any).on('login', (_event: any, _details: any, authInfo: any, callback: Function) => {
-        if (authInfo.isProxy) {
-          callback(proxy.username, proxy.password ?? '');
-        } else {
-          callback('', '');
-        }
-      });
-    }
+    // Proxy auth is handled globally via app.on('login') in index.ts.
+    // Credentials are pre-registered in proxy-credentials-store.ts above.
 
     // Set realistic user agent
     wc.setUserAgent(ua);
@@ -569,6 +567,8 @@ export class AgentEngine {
       offTabSwitch?.();                          // stop listening for tab switches
       mainWin.removeListener('resize', onResize);
       try { mainWin.contentView.removeChildView(view); } catch { }
+      // Remove cached proxy credentials for this partition (prevents memory leak)
+      deleteProxyCredentials(partition);
       // Don't destroy wc explicitly — Electron cleans up when view is removed
     }
   }
