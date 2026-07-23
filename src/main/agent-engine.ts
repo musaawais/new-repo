@@ -429,7 +429,7 @@ export class AgentEngine {
         task.logs.push(`${label}: 🔌 Testing proxy ${proxy.host}:${proxy.port}...`);
         this.emitStatus(task);
         // 25-second timeout — residential proxies are legitimately slow
-        const ok = await this.proxyWorks(wc, 25_000);
+        const ok = await this.proxyWorks(proxy, 25_000);
         if (ok) {
           task.logs.push(`${label}: ✅ Proxy connected`);
           this.emitStatus(task);
@@ -574,35 +574,53 @@ export class AgentEngine {
   // ── Proxy validation ──────────────────────────────────────────────────────
 
   /**
-   * Test if the proxy is reachable by loading a tiny HTTP endpoint.
+   * Test proxy by opening a raw TCP socket and sending an HTTP request.
    *
-   * Uses HTTP (not HTTPS) to avoid TLS overhead and CONNECT tunnel delays.
-   * ip-api.com returns a small JSON and is reliable from most proxies.
-   * Residential proxies are slow (10-30 s is normal) — timeout is generous.
+   * Bypasses Chromium/Electron session proxy entirely — uses Node's net module.
+   * This avoids Electron 30 proxy-auth issues with isolated sessions.
    *
-   * If the test times out or fails, the caller SKIPS the visit rather than
-   * falling back to the real IP — we never silently deanonymise the user.
+   * Flow:
+   *  1. TCP connect to proxy host:port
+   *  2. Send "GET http://ip-api.com/json HTTP/1.1" with Proxy-Authorization header
+   *  3. Any HTTP 2xx/3xx response = proxy is working
+   *  4. 407 = proxy reachable but credentials rejected
+   *  5. Timeout / connection refused = proxy unreachable
    */
-  private proxyWorks(wc: Electron.WebContents, timeoutMs: number): Promise<boolean> {
+  private proxyWorks(proxy: ParsedProxy, timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const net = require('net') as typeof import('net');
+      const socket = new net.Socket();
       let settled = false;
       const done = (ok: boolean) => {
         if (settled) return; settled = true;
-        clearTimeout(timer);
-        wc.removeListener('did-finish-load', onDone);
-        wc.removeListener('did-fail-load', onFail as any);
+        try { socket.destroy(); } catch { /* ignore */ }
         resolve(ok);
       };
-      const timer = setTimeout(() => done(false), timeoutMs);
-      const onDone = () => done(true);
-      // -3 = ERR_ABORTED (redirect followed = page loaded = proxy works)
-      // -130 = ERR_PROXY_CONNECTION_FAILED, -102 = ERR_CONNECTION_REFUSED, etc.
-      const onFail = (_: any, code: number) => done(code === -3);
 
-      wc.once('did-finish-load', onDone);
-      wc.once('did-fail-load', onFail as any);
-      // ip-api.com: plain HTTP, tiny JSON, no TLS overhead, works through all proxy types
-      wc.loadURL('http://ip-api.com/json?fields=status,query').catch(() => done(false));
+      socket.setTimeout(timeoutMs);
+      socket.connect(proxy.port, proxy.host, () => {
+        // TCP connected — send a real HTTP request through the proxy
+        const creds = proxy.username
+          ? Buffer.from(`${proxy.username}:${proxy.password ?? ''}`).toString('base64')
+          : null;
+        const authLine = creds ? `Proxy-Authorization: Basic ${creds}\r\n` : '';
+        socket.write(
+          `GET http://ip-api.com/json HTTP/1.1\r\n` +
+          `Host: ip-api.com\r\n` +
+          `Connection: close\r\n` +
+          authLine +
+          `\r\n`
+        );
+        socket.once('data', (data) => {
+          const first = data.toString('utf8', 0, 50);
+          const code = parseInt((first.split(' ')[1] ?? '0'), 10);
+          // 200-399 = proxy working; 407 = proxy up but auth rejected; 0 = no HTTP response
+          done(code >= 200 && code < 400);
+        });
+      });
+      socket.on('error', () => done(false));
+      socket.on('timeout', () => done(false));
     });
   }
 
