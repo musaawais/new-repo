@@ -5,6 +5,26 @@ import { SimpleStore } from './simple-store';
 import { BrowserManager } from './browser-manager';
 import { ProxyManager } from './proxy-manager';
 import { AgentEngine } from './agent-engine';
+import { getProxyCredentials } from './proxy-credentials-store';
+
+// ── Global proxy auth handler ─────────────────────────────────────────────────
+// app.on('login') is the ONLY reliable way to supply proxy credentials in
+// Electron 30 for HTTPS CONNECT tunnels. Chromium strips embedded credentials
+// from proxy URLs for CONNECT, and session/wc-level 'login' events fire too
+// late. This global handler fires for every 407 across all sessions.
+app.on('login', (event, _webContents, _details, authInfo, callback) => {
+  if (!authInfo.isProxy) return; // let non-proxy auth fall through
+  event.preventDefault();
+  // Identify which session this WebContents belongs to so we can look up creds.
+  const partition = (_webContents as any).session?.partition as string | undefined;
+  const creds = partition ? getProxyCredentials(partition) : undefined;
+  if (creds) {
+    callback(creds.username, creds.password);
+  } else {
+    callback('', '');
+  }
+});
+
 // ── Stealth: remove Chromium automation flags before anything else ─────────────
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 app.commandLine.appendSwitch('disable-infobars');
