@@ -1,0 +1,57 @@
+{
+  "appId": "com.agentbrowser.app",
+  "productName": "AgentBrowser",
+  "copyright": "Copyright © 2024 AgentBrowser",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "main": "dist/main/index.js"
+  },
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["x64"]
+      }
+    ],
+    "category": "public.app-category.productivity",
+    "icon": "build/icon.icns",
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false,
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "entitlements": "build/entitlements.mac.plist",
+    "minimumSystemVersion": "10.14"
+  },
+  "dmg": {
+    "title": "${productName} ${version}",
+    "contents": [
+      {
+        "x": 130,
+        "y": 220
+      },
+      {
+        "x": 410,
+        "y": 220,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ],
+    "window": {
+      "width": 540,
+      "height": 380
+    }
+  },
+  "asar": true,
+  "compression": "maximum"
+}
