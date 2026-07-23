@@ -278,17 +278,7 @@ export class AgentEngine {
       const proxyRules = buildProxyRules(proxy);
       try { await ses.setProxy({ proxyRules }); } catch { /* ignore */ }
 
-      // BACKUP: also handle 407 Proxy-Auth-Required via login event.
-      // Some proxy servers ignore URL-embedded credentials and still send 407.
-      if (proxy.username) {
-        ses.on('login', (_req: any, authInfo: any, callback: Function) => {
-          if (authInfo.isProxy) {
-            callback(proxy.username, proxy.password ?? '');
-          } else {
-            callback('', '');
-          }
-        });
-      }
+      // wc.on('login') is registered after wc is created below (Electron 30 approach)
     } else if (fallbackRules) {
       // No per-task proxy — inherit the active VPN or manual proxy
       try { await ses.setProxy({ proxyRules: fallbackRules }); } catch { /* ignore */ }
@@ -332,6 +322,18 @@ export class AgentEngine {
     view.setBackgroundColor('#ffffff');
 
     const wc = view.webContents;
+
+    // ── Proxy auth: Electron 30 requires wc-level login handler, not session-level ──
+    // Fires when proxy returns 407 (credentials not embedded or proxy ignores them).
+    if (proxy?.username) {
+      (wc as any).on('login', (_event: any, _details: any, authInfo: any, callback: Function) => {
+        if (authInfo.isProxy) {
+          callback(proxy.username, proxy.password ?? '');
+        } else {
+          callback('', '');
+        }
+      });
+    }
 
     // Set realistic user agent
     wc.setUserAgent(ua);
