@@ -163,6 +163,10 @@ function registerIpcHandlers() {
 }
 
 // ── Window factory ────────────────────────────────────────────────────────────
+function getRendererURL() {
+  return `file://${path.join(__dirname, '../renderer/index.html')}`;
+}
+
 async function createMainWindow() {
   const win = new BrowserWindow({
     width: 1400,
@@ -174,7 +178,6 @@ async function createMainWindow() {
     backgroundColor: '#0f0f13',
     vibrancy: 'sidebar',
     visualEffectState: 'active',
-    show: false,   // wait until ready-to-show so we never flash a blank frame
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -182,9 +185,6 @@ async function createMainWindow() {
       sandbox: false,
     },
   });
-
-  // Show window only after the renderer has painted its first frame
-  win.once('ready-to-show', () => win.show());
 
   refs.mainWindow = win;
   refs.proxyManager = new ProxyManager();
@@ -209,11 +209,7 @@ async function createMainWindow() {
     } catch { }
   });
 
-  // loadFile is the correct API for local files in production Electron builds.
-  // loadURL('file://...') can silently fail on macOS due to path encoding.
-  win.loadFile(path.join(__dirname, '../renderer/index.html')).catch((err) => {
-    console.error('[loadFile failed]', err);
-  });
+  win.loadURL(getRendererURL());
   win.on('resize', () => refs.browserManager?.repositionViews());
   win.on('closed', () => {
     if (refs.mainWindow === win) { refs.mainWindow = null; refs.browserManager = null; }
