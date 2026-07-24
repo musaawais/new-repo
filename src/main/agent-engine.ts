@@ -24,7 +24,7 @@ import {
   session as electronSession,
 } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
-import { setProxyCredentials, deleteProxyCredentials } from './proxy-credentials-store';
+import { startLocalProxy, LocalProxy } from './local-proxy';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -274,18 +274,26 @@ export class AgentEngine {
     const ses = electronSession.fromPartition(partition, { cache: false });
 
     // ── 2. Apply proxy to this session ────────────────────────────────────
+    // We spin up a tiny local HTTP proxy server per visit that handles the
+    // CONNECT handshake itself (injecting Proxy-Authorization manually).
+    // This completely bypasses Chromium's auth system, which strips credentials
+    // from HTTPS CONNECT and doesn't reliably fire login events for residential
+    // proxies that drop the connection instead of returning a 407.
+    let localProxy: LocalProxy | null = null;
     if (proxy) {
-      // Register credentials BEFORE setting proxy so the global app.on('login')
-      // handler in index.ts can supply them when Chromium sends a 407.
-      if (proxy.username) {
-        setProxyCredentials(partition, {
+      try {
+        localProxy = await startLocalProxy({
+          host: proxy.host,
+          port: proxy.port,
           username: proxy.username,
-          password: proxy.password ?? '',
+          password: proxy.password,
         });
+        await ses.setProxy({ proxyRules: `http://127.0.0.1:${localProxy.port}` });
+      } catch {
+        // If local proxy fails to start, fall back to direct embedded-creds approach
+        const proxyRules = buildProxyRules(proxy);
+        try { await ses.setProxy({ proxyRules }); } catch { /* ignore */ }
       }
-      // Embed credentials in the URL as well (works for some proxy servers).
-      const proxyRules = buildProxyRules(proxy);
-      try { await ses.setProxy({ proxyRules }); } catch { /* ignore */ }
     } else if (fallbackRules) {
       // No per-task proxy — inherit the active VPN or manual proxy
       try { await ses.setProxy({ proxyRules: fallbackRules }); } catch { /* ignore */ }
@@ -567,8 +575,8 @@ export class AgentEngine {
       offTabSwitch?.();                          // stop listening for tab switches
       mainWin.removeListener('resize', onResize);
       try { mainWin.contentView.removeChildView(view); } catch { }
-      // Remove cached proxy credentials for this partition (prevents memory leak)
-      deleteProxyCredentials(partition);
+      // Shut down the per-visit local proxy server (frees the port)
+      try { localProxy?.close(); } catch { /* ignore */ }
       // Don't destroy wc explicitly — Electron cleans up when view is removed
     }
   }
